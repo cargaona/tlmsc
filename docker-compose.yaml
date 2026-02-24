@@ -1,0 +1,40 @@
+services:
+  tlmsc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tlmsc-bot
+    environment:
+      # Telegram Configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      
+      # Path Configuration
+      - STAGING_PATH=/data/staging
+      
+      # Debug Mode
+      - DEBUG=${DEBUG:-true}
+      
+      # Streamrip Credentials - Qobuz
+      - QOBUZ_EMAIL=${QOBUZ_EMAIL:-}
+      - QOBUZ_PASSWORD=${QOBUZ_PASSWORD:-}
+      
+      # Streamrip Credentials - Deezer
+      - DEEZER_ARL=${DEEZER_ARL:-}
+    volumes:
+      - staging_data:/data/staging
+    restart: unless-stopped
+    networks:
+      - tlmsc_network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  staging_data:
+    driver: local
+
+networks:
+  tlmsc_network:
+    driver: bridge
