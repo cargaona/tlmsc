@@ -51,16 +51,17 @@ func (c *Client) Download(albumID, source string, progressCh chan<- Progress) er
 	// Use: rip id <source> album <albumID>
 	cmd := exec.Command("rip", "id", source, "album", albumID)
 
-	stdout, err := cmd.StdoutPipe()
+	// Pipe stderr (streamrip writes progress to stderr, not stdout)
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("download failed to start: %w", err)
 	}
 
-	scanner := bufio.NewScanner(stdout)
+	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if c.Debug {
@@ -78,6 +79,12 @@ func (c *Client) Download(albumID, source string, progressCh chan<- Progress) er
 
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("download command failed: %w", err)
+	}
+
+	// Send explicit completion status
+	progressCh <- Progress{
+		Status:  "completed",
+		Percent: 100,
 	}
 
 	return nil

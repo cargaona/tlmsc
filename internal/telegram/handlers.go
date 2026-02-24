@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -317,6 +318,64 @@ type searchState struct {
 
 // searchResults temporarily stores search results keyed by chat ID
 var searchResults = make(map[int64]*searchState)
+
+// UpdateDownloadMessage updates the Telegram message with download status
+func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress streamrip.Progress) {
+	// Parse job ID format: "chatID_messageID"
+	parts := strings.Split(job.ID, "_")
+	if len(parts) != 2 {
+		if h.debug {
+			fmt.Printf("[handlers] Invalid job ID format: %s\n", job.ID)
+		}
+		return
+	}
+
+	chatID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		if h.debug {
+			fmt.Printf("[handlers] Failed to parse chat ID: %v\n", err)
+		}
+		return
+	}
+
+	messageID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		if h.debug {
+			fmt.Printf("[handlers] Failed to parse message ID: %v\n", err)
+		}
+		return
+	}
+
+	// Build the updated message text
+	escapedArtist := escapeMarkdownV2(job.Album.Artist)
+	escapedTitle := escapeMarkdownV2(job.Album.Title)
+
+	var statusEmoji string
+	var statusText string
+
+	switch progress.Status {
+	case "completed":
+		statusEmoji = "✅"
+		statusText = "Downloaded successfully"
+	case "failed":
+		statusEmoji = "❌"
+		statusText = "Download failed"
+	case "downloading":
+		statusEmoji = "⏳"
+		statusText = fmt.Sprintf("Downloading\\.\\.\\. %d%%", progress.Percent)
+	default:
+		statusEmoji = "⏳"
+		statusText = fmt.Sprintf("%s (%d%%)", progress.Status, progress.Percent)
+	}
+
+	messageText := fmt.Sprintf("*%s \\- %s*\n\n%s %s", escapedArtist, escapedTitle, statusEmoji, statusText)
+
+	if err := h.bot.EditMessageText(chatID, messageID, messageText); err != nil {
+		if h.debug {
+			fmt.Printf("[handlers] Failed to update message: %v\n", err)
+		}
+	}
+}
 
 // Pagination constants
 const (

@@ -81,9 +81,9 @@ func main() {
 		// Log completion for drop2beets
 		if progress.Status == "completed" {
 			fmt.Printf("[download] Completed: %s\n", job.Album.Title)
+			// Update Telegram message to show download completed
+			handlers.UpdateDownloadMessage(job, progress)
 		}
-
-		// TODO: Update Telegram message with progress
 	}
 
 	// Start download worker
