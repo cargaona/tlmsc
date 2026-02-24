@@ -4,8 +4,9 @@ set -e
 
 echo "🎵 TLMSC Entrypoint - Initializing..."
 
-# Create config directories
-mkdir -p /root/.config/streamrip /data/staging
+# Use HOME env var or default to /tmp for config
+CONFIG_HOME="${HOME:-.}"
+mkdir -p "$CONFIG_HOME/.config/streamrip" /data/staging
 
 # Generate default streamrip config
 echo "📝 Generating streamrip configuration..."
@@ -16,9 +17,9 @@ if [ -n "$QOBUZ_EMAIL" ] && [ -n "$QOBUZ_PASSWORD" ]; then
     echo "🔐 Setting Qobuz credentials..."
     
     # Patch the config file - pass token/hash as-is without transformation
-    sed -i "s/^email_or_userid = .*/email_or_userid = \"$QOBUZ_EMAIL\"/" /root/.config/streamrip/config.toml
-    sed -i "s/^password_or_token = .*/password_or_token = \"$QOBUZ_PASSWORD\"/" /root/.config/streamrip/config.toml
-    sed -i 's/^use_auth_token = .*/use_auth_token = false/' /root/.config/streamrip/config.toml
+    sed -i "s/^email_or_userid = .*/email_or_userid = \"$QOBUZ_EMAIL\"/" "$CONFIG_HOME/.config/streamrip/config.toml"
+    sed -i "s/^password_or_token = .*/password_or_token = \"$QOBUZ_PASSWORD\"/" "$CONFIG_HOME/.config/streamrip/config.toml"
+    sed -i 's/^use_auth_token = .*/use_auth_token = false/' "$CONFIG_HOME/.config/streamrip/config.toml"
     
     echo "✅ Qobuz configured"
 else
@@ -34,8 +35,8 @@ if [ -n "$DEEZER_ARL" ]; then
     echo "🔐 Setting Deezer credentials..."
     
     # Patch the config file
-    sed -i "s/^arl = .*/arl = \"$DEEZER_ARL\"/" /root/.config/streamrip/config.toml
-    sed -i 's/^use_deezloader = .*/use_deezloader = false/' /root/.config/streamrip/config.toml
+    sed -i "s/^arl = .*/arl = \"$DEEZER_ARL\"/" "$CONFIG_HOME/.config/streamrip/config.toml"
+    sed -i 's/^use_deezloader = .*/use_deezloader = false/' "$CONFIG_HOME/.config/streamrip/config.toml"
     
     echo "✅ Deezer configured"
 else
@@ -44,10 +45,10 @@ fi
 
 # Update download folder to staging path
 echo "📁 Setting download folder to /data/staging..."
-sed -i 's|^folder = .*|folder = "/data/staging"|' /root/.config/streamrip/config.toml
+sed -i 's|^folder = .*|folder = "/data/staging"|' "$CONFIG_HOME/.config/streamrip/config.toml"
 
 # Verify config is valid
-echo "✅ Streamrip configuration generated at /root/.config/streamrip/config.toml"
+echo "✅ Streamrip configuration generated at $CONFIG_HOME/.config/streamrip/config.toml"
 
 # Check credential status
 CRED_STATUS=""

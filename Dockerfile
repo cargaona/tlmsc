@@ -41,9 +41,6 @@ COPY --from=builder /app/tlmsc-bot /app/tlmsc-bot
 COPY scripts/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Create directories
-RUN mkdir -p /root/.config/streamrip /data/staging
-
 # Expose staging directory
 VOLUME ["/data/staging"]
 
