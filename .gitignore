@@ -50,7 +50,6 @@ coverage.txt
 
 # Go modules
 vendor/
-go.sum
 
 # Config files (for local testing)
 config.toml
