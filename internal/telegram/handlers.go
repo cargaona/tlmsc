@@ -244,8 +244,8 @@ func (h *Handlers) HandleImport(update *tgbotapi.Update) error {
 		return err
 	}
 
-	// Run beet import -q on the staging directory
-	cmd := exec.Command("beet", "import", "-q", h.stagingPath)
+	// Run beet import -q with asis fallback so weak matches are imported with original tags
+	cmd := exec.Command("beet", "import", "-q", "--quiet-fallback=asis", h.stagingPath)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		errText := fmt.Sprintf("❌ *Import failed*\n\n```\n%s\n```", escapeMarkdownV2(string(output)))
@@ -258,19 +258,49 @@ func (h *Handlers) HandleImport(update *tgbotapi.Update) error {
 	}
 
 	// Clean up album directories from staging
+	// Only remove dirs where beets has moved the music files out (move: yes in beets config)
+	musicExts := []string{"*.flac", "*.mp3", "*.ogg", "*.m4a", "*.wav", "*.opus"}
 	cleaned := 0
+	skipped := 0
 	for _, d := range dirs {
 		dirPath := filepath.Join(h.stagingPath, d.Name())
+		hasMusicFiles := false
+		for _, ext := range musicExts {
+			matches, _ := filepath.Glob(filepath.Join(dirPath, "**", ext))
+			if len(matches) > 0 {
+				hasMusicFiles = true
+				break
+			}
+			// Also check top level (non-nested)
+			matches, _ = filepath.Glob(filepath.Join(dirPath, ext))
+			if len(matches) > 0 {
+				hasMusicFiles = true
+				break
+			}
+		}
+		if hasMusicFiles {
+			skipped++
+			if h.debug {
+				fmt.Printf("[import] Skipping cleanup of %s: still contains music files\n", dirPath)
+			}
+			continue
+		}
 		if err := os.RemoveAll(dirPath); err != nil {
 			if h.debug {
 				fmt.Printf("[import] Failed to remove %s: %v\n", dirPath, err)
 			}
+			skipped++
 			continue
 		}
 		cleaned++
 	}
 
-	resultText := fmt.Sprintf("✅ *Import complete*\n\nImported and cleaned up %d album\\(s\\)", cleaned)
+	var resultText string
+	if skipped > 0 {
+		resultText = fmt.Sprintf("⚠️ *Import done*\n\nCleaned up %d album\\(s\\), %d still in staging \\(check manually\\)", cleaned, skipped)
+	} else {
+		resultText = fmt.Sprintf("✅ *Import complete*\n\nImported and cleaned up %d album\\(s\\)", cleaned)
+	}
 	h.bot.EditMessageText(chatID, sentMsg.MessageID, resultText)
 	return nil
 }
