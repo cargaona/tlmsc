@@ -1,8 +1,6 @@
 # TLMSC - Telegram Music Search & Downloader
 
-A lightweight Go-based Telegram bot that searches for albums on Qobuz and Deezer, and downloads them via streamrip to a staging folder. 
-
-Music library management is handled by a separate process. You can use beets with drop2beets to monitor the download folder`
+A lightweight Go-based Telegram bot that searches for albums on Qobuz and Deezer, downloads them via streamrip, and imports them into your beets library.
 
 ## Features
 
@@ -10,6 +8,7 @@ Music library management is handled by a separate process. You can use beets wit
 - ⬇️ **Streamlined Downloads** - Direct download to staging folder via `rip id`
 - 🔄 **Automatic Fallback** - If Qobuz fails, automatically retries with Deezer
 - 📱 **Telegram Integration** - Inline keyboards, pagination, real-time logging
+- 📦 **Beets Import** - Import staged albums to your beets library with `/import`, with automatic cleanup
 - 🐳 **Docker-Ready** - Simple Docker Compose setup for quick deployment
 - 🔐 **Environment-Based Config** - Credentials via env vars (no hardcoding)
 
@@ -18,16 +17,17 @@ Music library management is handled by a separate process. You can use beets wit
 ```
 ┌─────────────────────────────────────────┐
 │         TLMSC Container                 │
-│  (Telegram Bot + Streamrip)             │
+│  (Telegram Bot + Streamrip + Beets)     │
 │                                         │
 │  ✓ Telegram bot (/start, /search)      │
 │  ✓ Album search (Qobuz + Deezer)       │
 │  ✓ Download to staging                 │
+│  ✓ Beets import (/import)             │
 │  ✓ Completion logging                  │
-└────────────┬──────────────────────────┘
-             │
-             ▼ (shared volume)
-        /data/staging/
+└────────────┬────────────┬─────────────┘
+             │            │
+             ▼            ▼ (beets move)
+        /data/staging/    /mnt/seagate/music/
 ```
 
 ## Prerequisites
@@ -88,6 +88,7 @@ In Telegram:
 /start                          - Welcome message
 /search kiss                    - Search for albums (pagination ready)
 /queue                          - Show download status
+/import                         - Import staged albums to beets library
 ```
 
 Select an album → bot downloads to `/data/staging`
@@ -101,6 +102,7 @@ Select an album → bot downloads to `/data/staging`
 | `/start` | `/start` | Welcome message with available commands |
 | `/search` | `/search pez los orfebres` | Search results with 10-per-page pagination |
 | `/queue` | `/queue` | Show currently downloading album |
+| `/import` | `/import` | Import all staged albums to beets library and clean up |
 
 ### Download Flow
 
@@ -109,6 +111,8 @@ Select an album → bot downloads to `/data/staging`
 3. Results shown with pagination (10 per page)
 4. User clicks album button to download
 5. Bot: `[download] Completed: Album Title`
+6. User sends `/import` to import staged albums into beets library
+7. Beets moves files to the music library, bot cleans up empty staging folders
 
 ### Automatic Retry
 
@@ -132,12 +136,22 @@ DEEZER_ARL=arl_token
 
 # Optional (defaults shown)
 STAGING_PATH=/data/staging
+BEETSDIR=/home/char/.config/beets
 DEBUG=false
 ```
 
 ### Docker Compose
 
 See `docker-compose.yaml` for volume mounts and networking options.
+
+### Kubernetes
+
+For k8s deployment, the container needs volume mounts for:
+- **Staging** (`/data/staging`) - where streamrip downloads albums
+- **Music library** (`/mnt/seagate/music`) - beets music directory and `library.db`
+- **Beets config** - a ConfigMap mounted at `$BEETSDIR/config.yaml`
+
+The beets music library must be mounted at the same path as on the host so `beet` works identically inside and outside the container. See the manifests in `kube-server/manifests/namespaces/tlmsc/` for a working example.
 
 
 ## Development

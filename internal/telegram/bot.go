@@ -109,6 +109,22 @@ func (b *Bot) AnswerCallbackQuery(callbackID string, text string, alert bool) er
 	return err
 }
 
+// SendPhoto sends a photo message with caption and inline keyboard
+func (b *Bot) SendPhoto(chatID int64, photoURL string, caption string, markup tgbotapi.InlineKeyboardMarkup) (tgbotapi.Message, error) {
+	photo := tgbotapi.NewPhoto(chatID, tgbotapi.FileURL(photoURL))
+	photo.Caption = caption
+	photo.ParseMode = tgbotapi.ModeMarkdownV2
+	photo.ReplyMarkup = markup
+	return b.api.Send(photo)
+}
+
+// DeleteMessage deletes a message
+func (b *Bot) DeleteMessage(chatID int64, messageID int) error {
+	del := tgbotapi.NewDeleteMessage(chatID, messageID)
+	_, err := b.api.Request(del)
+	return err
+}
+
 // GetMe returns bot information
 func (b *Bot) GetMe() (tgbotapi.User, error) {
 	return b.api.GetMe()

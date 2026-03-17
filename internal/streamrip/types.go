@@ -7,6 +7,7 @@ type Album struct {
 	Year       int
 	Source     string
 	URL        string
+	CoverURL   string
 	Quality    string
 	TrackCount int
 }

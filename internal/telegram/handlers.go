@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"tlmsc/internal/cover"
 	"tlmsc/internal/download"
 	"tlmsc/internal/streamrip"
 )
@@ -43,62 +44,151 @@ func escapeMarkdownV2(text string) string {
 	return result
 }
 
-// buildResultsKeyboard builds an inline keyboard for paginated search results
-func buildResultsKeyboard(albums []albumResult, currentPage int) tgbotapi.InlineKeyboardMarkup {
+// buildCarouselKeyboard builds an inline keyboard for carousel navigation
+func buildCarouselKeyboard(currentIndex int, totalCount int, albumID string, source string) tgbotapi.InlineKeyboardMarkup {
+	var navButtons []tgbotapi.InlineKeyboardButton
+
+	// Previous button
+	if currentIndex > 0 {
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("◀ Prev", "carousel_prev"))
+	} else {
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("  •  ", "_disabled"))
+	}
+
+	// Download button
+	navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData(
+		"⬇ Download",
+		fmt.Sprintf("download_%s_%s", albumID, source),
+	))
+
+	// Next button
+	if currentIndex < totalCount-1 {
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("Next ▶", "carousel_next"))
+	} else {
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("  •  ", "_disabled"))
+	}
+
+	// Counter row
+	counterBtn := tgbotapi.NewInlineKeyboardButtonData(
+		fmt.Sprintf("Album %d of %d", currentIndex+1, totalCount),
+		"_page_info",
+	)
+
+	return tgbotapi.NewInlineKeyboardMarkup(navButtons, []tgbotapi.InlineKeyboardButton{counterBtn})
+}
+
+// sendCarouselItem sends the current carousel album as a photo message
+// Returns the sent message so the caller can track its ID
+func (h *Handlers) sendCarouselItem(chatID int64, state *searchState) (tgbotapi.Message, error) {
+	result := &state.Albums[state.Index]
+
+	// Fetch cover URL if not cached
+	if result.Album.CoverURL == "" {
+		result.Album.CoverURL = cover.FetchCoverURL(result.Album.ID, result.Source, result.Album.Artist, result.Album.Title)
+	}
+
+	markup := buildCarouselKeyboard(state.Index, len(state.Albums), result.Album.ID, result.Source)
+
+	// Build caption
+	var yearStr string
+	if result.Album.Year > 0 {
+		yearStr = fmt.Sprintf(" \\(%d\\)", result.Album.Year)
+	}
+	caption := fmt.Sprintf("*%s* \\- %s%s",
+		escapeMarkdownV2(result.Album.Artist),
+		escapeMarkdownV2(result.Album.Title),
+		yearStr,
+	)
+
+	// Send as photo if cover URL available, otherwise text
+	if result.Album.CoverURL != "" {
+		return h.bot.SendPhoto(chatID, result.Album.CoverURL, caption, markup)
+	}
+
+	// Fallback: text-only message
+	msg := tgbotapi.NewMessage(chatID, caption)
+	msg.ParseMode = tgbotapi.ModeMarkdownV2
+	msg.ReplyMarkup = markup
+	return h.bot.Send(msg)
+}
+
+// buildListKeyboard builds an inline keyboard for the paginated album list
+// Each album button uses jump_{globalIndex} callback data
+func buildListKeyboard(albums []albumResult, currentPage int) tgbotapi.InlineKeyboardMarkup {
 	totalResults := len(albums)
 	totalPages := (totalResults + resultsPerPage - 1) / resultsPerPage
 
-	// Calculate page bounds
 	startIdx := currentPage * resultsPerPage
 	endIdx := startIdx + resultsPerPage
 	if endIdx > totalResults {
 		endIdx = totalResults
 	}
 
-	// Build album button rows for current page
 	var rows [][]tgbotapi.InlineKeyboardButton
-	for _, result := range albums[startIdx:endIdx] {
+	for i, result := range albums[startIdx:endIdx] {
+		globalIdx := startIdx + i
+		label := fmt.Sprintf("%d. %s - %s (%d)", globalIdx+1, result.Album.Artist, result.Album.Title, result.Album.Year)
+		// Telegram button labels have a 64-byte limit for callback data, truncate label if needed
+		if len(label) > 60 {
+			label = label[:57] + "..."
+		}
 		button := tgbotapi.NewInlineKeyboardButtonData(
-			fmt.Sprintf("%s - %s (%d)", result.Album.Artist, result.Album.Title, result.Album.Year),
-			fmt.Sprintf("download_%s_%s", result.Album.ID, result.Source),
+			label,
+			fmt.Sprintf("jump_%d", globalIdx),
 		)
 		rows = append(rows, []tgbotapi.InlineKeyboardButton{button})
 	}
 
-	// Add pagination navigation row
+	// Navigation row
 	var navButtons []tgbotapi.InlineKeyboardButton
 
-	// Previous button
 	if currentPage > 0 {
-		prevBtn := tgbotapi.NewInlineKeyboardButtonData("◀ Prev", fmt.Sprintf("page_prev"))
-		navButtons = append(navButtons, prevBtn)
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("◀ Prev", "list_prev"))
 	} else {
-		// Placeholder for alignment
-		disabledBtn := tgbotapi.NewInlineKeyboardButtonData("  •  ", "_disabled")
-		navButtons = append(navButtons, disabledBtn)
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("  •  ", "_disabled"))
 	}
 
-	// Page indicator (non-clickable, but we use a dummy callback)
-	pageBtn := tgbotapi.NewInlineKeyboardButtonData(
+	navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData(
 		fmt.Sprintf("Page %d/%d", currentPage+1, totalPages),
 		"_page_info",
-	)
-	navButtons = append(navButtons, pageBtn)
+	))
 
-	// Next button
 	if currentPage < totalPages-1 {
-		nextBtn := tgbotapi.NewInlineKeyboardButtonData("Next ▶", fmt.Sprintf("page_next"))
-		navButtons = append(navButtons, nextBtn)
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("Next ▶", "list_next"))
 	} else {
-		// Placeholder for alignment
-		disabledBtn := tgbotapi.NewInlineKeyboardButtonData("  •  ", "_disabled")
-		navButtons = append(navButtons, disabledBtn)
+		navButtons = append(navButtons, tgbotapi.NewInlineKeyboardButtonData("  •  ", "_disabled"))
 	}
 
 	rows = append(rows, navButtons)
-
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
 }
+
+// listText returns the header text for the album list
+func listText(totalAlbums int, currentPage int) string {
+	totalPages := (totalAlbums + resultsPerPage - 1) / resultsPerPage
+	return fmt.Sprintf("Found %d albums\\. Page %d/%d:\n_Tap an album to preview its cover_", totalAlbums, currentPage+1, totalPages)
+}
+
+// sendAlbumList sends or edits the paginated album list message
+func (h *Handlers) sendAlbumList(chatID int64, state *searchState) (tgbotapi.Message, error) {
+	markup := buildListKeyboard(state.Albums, state.Page)
+	text := listText(len(state.Albums), state.Page)
+
+	msg := tgbotapi.NewMessage(chatID, text)
+	msg.ParseMode = tgbotapi.ModeMarkdownV2
+	msg.ReplyMarkup = markup
+	return h.bot.Send(msg)
+}
+
+// updateAlbumList edits the existing album list message with a new page
+func (h *Handlers) updateAlbumList(chatID int64, state *searchState) {
+	markup := buildListKeyboard(state.Albums, state.Page)
+	text := listText(len(state.Albums), state.Page)
+	h.bot.EditMessageTextWithMarkup(chatID, state.ListMessageID, text, markup)
+}
+
+// Pagination constants
+const resultsPerPage = 10
 
 // HandleStart sends a welcome message
 func (h *Handlers) HandleStart(update *tgbotapi.Update) error {
@@ -138,6 +228,8 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 		return err
 	}
 
+	chatID := update.Message.Chat.ID
+
 	// Search on all sources
 	var allAlbums []albumResult
 	for _, source := range []string{"qobuz", "deezer"} {
@@ -150,7 +242,6 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 		}
 
 		for _, album := range albums {
-			// Stop if we reach max results across all sources
 			if len(allAlbums) >= maxResults {
 				break
 			}
@@ -160,7 +251,6 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 			})
 		}
 
-		// Break outer loop if we've hit max results
 		if len(allAlbums) >= maxResults {
 			break
 		}
@@ -168,24 +258,34 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 
 	// If no results found
 	if len(allAlbums) == 0 {
-		h.bot.EditMessageText(update.Message.Chat.ID, sentMsg.MessageID, "No albums found\\. Try a different query\\.")
+		h.bot.EditMessageText(chatID, sentMsg.MessageID, "No albums found\\. Try a different query\\.")
 		return nil
 	}
 
-	// Store search results in memory with pagination state (in production, use proper session storage)
+	// Store search results
 	state := &searchState{
 		Albums: allAlbums,
+		Index:  0,
 		Page:   0,
 	}
-	searchResults[update.Message.Chat.ID] = state
+	searchResults[chatID] = state
 
-	// Build keyboard for first page
-	markup := buildResultsKeyboard(allAlbums, 0)
+	// Delete the "searching..." message
+	h.bot.DeleteMessage(chatID, sentMsg.MessageID)
 
-	// Update message with results
-	totalPages := (len(allAlbums) + resultsPerPage - 1) / resultsPerPage
-	resultText := fmt.Sprintf("Found %d albums\\. Page 1/%d:", len(allAlbums), totalPages)
-	h.bot.EditMessageTextWithMarkup(update.Message.Chat.ID, sentMsg.MessageID, resultText, markup)
+	// Send album list
+	listMsg, err := h.sendAlbumList(chatID, state)
+	if err != nil {
+		return err
+	}
+	state.ListMessageID = listMsg.MessageID
+
+	// Send first carousel item below the list
+	carouselMsg, err := h.sendCarouselItem(chatID, state)
+	if err != nil {
+		return err
+	}
+	state.MessageID = carouselMsg.MessageID
 
 	return nil
 }
@@ -319,26 +419,73 @@ func (h *Handlers) HandleCallback(update *tgbotapi.Update) error {
 		return nil
 	}
 
-	// Handle pagination navigation
-	if data == "page_next" {
+	// Handle list pagination
+	if data == "list_next" {
 		totalPages := (len(state.Albums) + resultsPerPage - 1) / resultsPerPage
 		if state.Page < totalPages-1 {
 			state.Page++
-			markup := buildResultsKeyboard(state.Albums, state.Page)
-			resultText := fmt.Sprintf("Found %d albums\\. Page %d/%d:", len(state.Albums), state.Page+1, totalPages)
-			h.bot.EditMessageTextWithMarkup(chatID, messageID, resultText, markup)
+			h.updateAlbumList(chatID, state)
 		}
 		h.bot.AnswerCallbackQuery(callbackID, "", false)
 		return nil
 	}
 
-	if data == "page_prev" {
+	if data == "list_prev" {
 		if state.Page > 0 {
 			state.Page--
-			totalPages := (len(state.Albums) + resultsPerPage - 1) / resultsPerPage
-			markup := buildResultsKeyboard(state.Albums, state.Page)
-			resultText := fmt.Sprintf("Found %d albums\\. Page %d/%d:", len(state.Albums), state.Page+1, totalPages)
-			h.bot.EditMessageTextWithMarkup(chatID, messageID, resultText, markup)
+			h.updateAlbumList(chatID, state)
+		}
+		h.bot.AnswerCallbackQuery(callbackID, "", false)
+		return nil
+	}
+
+	// Handle jump to album from list
+	if strings.HasPrefix(data, "jump_") {
+		idxStr := strings.TrimPrefix(data, "jump_")
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil || idx < 0 || idx >= len(state.Albums) {
+			h.bot.AnswerCallbackQuery(callbackID, "Invalid album", true)
+			return nil
+		}
+		state.Index = idx
+		// Delete old carousel message and send new one
+		if state.MessageID != 0 {
+			h.bot.DeleteMessage(chatID, state.MessageID)
+		}
+		newMsg, err := h.sendCarouselItem(chatID, state)
+		if err != nil {
+			return err
+		}
+		state.MessageID = newMsg.MessageID
+		h.bot.AnswerCallbackQuery(callbackID, "", false)
+		return nil
+	}
+
+	// Handle carousel navigation
+	if data == "carousel_next" {
+		if state.Index < len(state.Albums)-1 {
+			state.Index++
+			// Delete old message and send new one (can't edit photo on a photo message)
+			h.bot.DeleteMessage(chatID, messageID)
+			newMsg, err := h.sendCarouselItem(chatID, state)
+			if err != nil {
+				return err
+			}
+			state.MessageID = newMsg.MessageID
+		}
+		h.bot.AnswerCallbackQuery(callbackID, "", false)
+		return nil
+	}
+
+	if data == "carousel_prev" {
+		if state.Index > 0 {
+			state.Index--
+			h.bot.DeleteMessage(chatID, messageID)
+			newMsg, err := h.sendCarouselItem(chatID, state)
+			if err != nil {
+				return err
+			}
+			state.MessageID = newMsg.MessageID
 		}
 		h.bot.AnswerCallbackQuery(callbackID, "", false)
 		return nil
@@ -396,11 +543,21 @@ func (h *Handlers) HandleCallback(update *tgbotapi.Update) error {
 	// Enqueue the download
 	h.queue.Enqueue(job)
 
-	// Update the message with escaped MarkdownV2
+	// Delete carousel message and send download status
+	h.bot.DeleteMessage(chatID, messageID)
 	escapedArtist := escapeMarkdownV2(album.Artist)
 	escapedTitle := escapeMarkdownV2(album.Title)
 	downloadingText := fmt.Sprintf("*%s \\- %s*\n\n⏳ Queued for download", escapedArtist, escapedTitle)
-	h.bot.EditMessageText(chatID, messageID, downloadingText)
+	statusMsg := tgbotapi.NewMessage(chatID, downloadingText)
+	statusMsg.ParseMode = tgbotapi.ModeMarkdownV2
+	sentMsg, err := h.bot.Send(statusMsg)
+	if err != nil {
+		h.bot.AnswerCallbackQuery(callbackID, "Download queued", false)
+		return err
+	}
+
+	// Update job ID with the new message ID for progress updates
+	job.ID = fmt.Sprintf("%d_%d", chatID, sentMsg.MessageID)
 
 	h.bot.AnswerCallbackQuery(callbackID, "Download queued", false)
 	return nil
@@ -412,10 +569,13 @@ type albumResult struct {
 	Source string
 }
 
-// searchState stores pagination state for search results
+// searchState stores carousel state for search results
 type searchState struct {
-	Albums []albumResult
-	Page   int
+	Albums        []albumResult
+	Index         int
+	Page          int
+	MessageID     int // carousel photo message
+	ListMessageID int // album list text message
 }
 
 // searchResults temporarily stores search results keyed by chat ID
@@ -479,8 +639,5 @@ func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress st
 	}
 }
 
-// Pagination constants
-const (
-	resultsPerPage = 10
-	maxResults     = 50
-)
+// Maximum search results
+const maxResults = 50
