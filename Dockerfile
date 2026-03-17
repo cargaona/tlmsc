@@ -29,7 +29,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
-RUN pip install --no-cache-dir streamrip
+RUN pip install --no-cache-dir streamrip beets
 
 # Create data directories
 RUN mkdir -p /data/staging

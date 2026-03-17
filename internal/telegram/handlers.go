@@ -2,6 +2,9 @@ package telegram
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -11,18 +14,20 @@ import (
 )
 
 type Handlers struct {
-	bot    *Bot
-	client *streamrip.Client
-	queue  *download.Queue
-	debug  bool
+	bot         *Bot
+	client      *streamrip.Client
+	queue       *download.Queue
+	stagingPath string
+	debug       bool
 }
 
-func NewHandlers(bot *Bot, client *streamrip.Client, queue *download.Queue, debug bool) *Handlers {
+func NewHandlers(bot *Bot, client *streamrip.Client, queue *download.Queue, stagingPath string, debug bool) *Handlers {
 	return &Handlers{
-		bot:    bot,
-		client: client,
-		queue:  queue,
-		debug:  debug,
+		bot:         bot,
+		client:      client,
+		queue:       queue,
+		stagingPath: stagingPath,
+		debug:       debug,
 	}
 }
 
@@ -104,6 +109,7 @@ I can help you search for albums and download them to your library\.
 Available commands:
 • /search <query> \- Search for albums
 • /queue \- Show download queue status
+• /import \- Import staged albums to beets library
 
 Example: /search rumours fleetwood mac`
 
@@ -201,6 +207,72 @@ func (h *Handlers) HandleQueue(update *tgbotapi.Update) error {
 
 	_, err := h.bot.Send(queueMsg)
 	return err
+}
+
+// HandleImport runs beet import on the staging directory and cleans up after
+func (h *Handlers) HandleImport(update *tgbotapi.Update) error {
+	chatID := update.Message.Chat.ID
+
+	// Check if there's anything to import
+	entries, err := os.ReadDir(h.stagingPath)
+	if err != nil {
+		msg := tgbotapi.NewMessage(chatID, "❌ Failed to read staging directory")
+		h.bot.Send(msg)
+		return err
+	}
+
+	// Filter to directories only (album folders)
+	var dirs []os.DirEntry
+	for _, e := range entries {
+		if e.IsDir() {
+			dirs = append(dirs, e)
+		}
+	}
+
+	if len(dirs) == 0 {
+		msg := tgbotapi.NewMessage(chatID, "No albums in staging to import\\.")
+		msg.ParseMode = tgbotapi.ModeMarkdownV2
+		h.bot.Send(msg)
+		return nil
+	}
+
+	// Send importing message
+	importingMsg := tgbotapi.NewMessage(chatID, fmt.Sprintf("⏳ Importing %d album\\(s\\) to beets\\.\\.\\.", len(dirs)))
+	importingMsg.ParseMode = tgbotapi.ModeMarkdownV2
+	sentMsg, err := h.bot.Send(importingMsg)
+	if err != nil {
+		return err
+	}
+
+	// Run beet import -q on the staging directory
+	cmd := exec.Command("beet", "import", "-q", h.stagingPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		errText := fmt.Sprintf("❌ *Import failed*\n\n```\n%s\n```", escapeMarkdownV2(string(output)))
+		h.bot.EditMessageText(chatID, sentMsg.MessageID, errText)
+		return err
+	}
+
+	if h.debug {
+		fmt.Printf("[import] beet import output: %s\n", string(output))
+	}
+
+	// Clean up album directories from staging
+	cleaned := 0
+	for _, d := range dirs {
+		dirPath := filepath.Join(h.stagingPath, d.Name())
+		if err := os.RemoveAll(dirPath); err != nil {
+			if h.debug {
+				fmt.Printf("[import] Failed to remove %s: %v\n", dirPath, err)
+			}
+			continue
+		}
+		cleaned++
+	}
+
+	resultText := fmt.Sprintf("✅ *Import complete*\n\nImported and cleaned up %d album\\(s\\)", cleaned)
+	h.bot.EditMessageText(chatID, sentMsg.MessageID, resultText)
+	return nil
 }
 
 // HandleCallback handles inline button presses

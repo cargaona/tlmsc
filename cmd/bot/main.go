@@ -54,12 +54,13 @@ func main() {
 	downloadQueue := download.NewQueue(10)
 
 	// Initialize handlers
-	handlers := telegram.NewHandlers(tgBot, streamripClient, downloadQueue, cfg.DebugMode)
+	handlers := telegram.NewHandlers(tgBot, streamripClient, downloadQueue, cfg.StagingPath, cfg.DebugMode)
 
 	// Register command handlers
 	tgBot.RegisterHandler("start", handlers.HandleStart)
 	tgBot.RegisterHandler("search", handlers.HandleSearch)
 	tgBot.RegisterHandler("queue", handlers.HandleQueue)
+	tgBot.RegisterHandler("import", handlers.HandleImport)
 
 	// Register callback handler
 	tgBot.RegisterCallbackHandler(handlers.HandleCallback)
