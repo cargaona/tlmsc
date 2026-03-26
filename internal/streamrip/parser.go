@@ -104,7 +104,11 @@ func parseAlbumLine(line string, source string) *Album {
 	}
 }
 
-// ParseDownloadProgress parses download progress from streamrip output
+// ParseDownloadProgress parses download progress from streamrip output.
+// Note: streamrip v2 uses rich/textual TUI progress bars that don't emit
+// text when piped (non-TTY). In practice, no intermediate progress events
+// are parsed — only the explicit "starting" and "completed" events from
+// Client.Download are used. This function is kept for forward compatibility.
 func ParseDownloadProgress(line string) (*Progress, error) {
 	// Look for progress indicators in streamrip output
 	// Common patterns: "Downloading: 50%", "[████████░░░░░░░░░░] 50%", "Track: Song Title"

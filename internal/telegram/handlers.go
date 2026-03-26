@@ -600,19 +600,8 @@ func (h *Handlers) HandleCallback(update *tgbotapi.Update) error {
 	album := selectedAlbum.Album
 	album.Source = source
 
-	// Create download job
-	job := &streamrip.DownloadJob{
-		ID:       fmt.Sprintf("%d_%d", chatID, messageID),
-		Album:    album,
-		DestPath: "/data/staging",
-		Source:   source,
-		Retries:  0,
-	}
-
-	// Enqueue the download
-	h.queue.Enqueue(job)
-
-	// Delete carousel message and send download status
+	// Send status message BEFORE enqueuing to avoid race condition
+	// (worker could fire "starting" callback before we have the new message ID)
 	h.bot.DeleteMessage(chatID, messageID)
 	escapedArtist := escapeMarkdownV2(album.Artist)
 	escapedTitle := escapeMarkdownV2(album.Title)
@@ -625,8 +614,15 @@ func (h *Handlers) HandleCallback(update *tgbotapi.Update) error {
 		return err
 	}
 
-	// Update job ID with the new message ID for progress updates
-	job.ID = fmt.Sprintf("%d_%d", chatID, sentMsg.MessageID)
+	// Create and enqueue download job with the correct status message ID
+	job := &streamrip.DownloadJob{
+		ID:       fmt.Sprintf("%d_%d", chatID, sentMsg.MessageID),
+		Album:    album,
+		DestPath: "/data/staging",
+		Source:   source,
+		Retries:  0,
+	}
+	h.queue.Enqueue(job)
 
 	h.bot.AnswerCallbackQuery(callbackID, "Download queued", false)
 	return nil
@@ -710,12 +706,10 @@ func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress st
 	case "failed":
 		statusEmoji = "❌"
 		statusText = "Download failed"
-	case "downloading":
-		statusEmoji = "⏳"
-		statusText = fmt.Sprintf("Downloading\\.\\.\\. %d%%", progress.Percent)
 	default:
+		// "starting", "downloading", or any other intermediate state
 		statusEmoji = "⏳"
-		statusText = escapeMarkdownV2(fmt.Sprintf("%s (%d%%)", progress.Status, progress.Percent))
+		statusText = "Downloading\\.\\.\\."
 	}
 
 	messageText := fmt.Sprintf("*%s \\- %s*\n\n%s %s", escapedArtist, escapedTitle, statusEmoji, statusText)
