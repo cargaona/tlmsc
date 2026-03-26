@@ -125,6 +125,24 @@ func (b *Bot) DeleteMessage(chatID int64, messageID int) error {
 	return err
 }
 
+// SendChatAction sends a chat action indicator (e.g., "typing", "upload_document")
+func (b *Bot) SendChatAction(chatID int64, action string) {
+	actionMsg := tgbotapi.NewChatAction(chatID, action)
+	b.api.Send(actionMsg)
+}
+
+// SetCommands registers the bot's command menu in Telegram
+func (b *Bot) SetCommands() error {
+	commands := tgbotapi.NewSetMyCommands(
+		tgbotapi.BotCommand{Command: "search", Description: "Search for albums"},
+		tgbotapi.BotCommand{Command: "queue", Description: "Show download queue status"},
+		tgbotapi.BotCommand{Command: "import", Description: "Import staged albums to library"},
+		tgbotapi.BotCommand{Command: "help", Description: "Show help and commands"},
+	)
+	_, err := b.api.Request(commands)
+	return err
+}
+
 // GetMe returns bot information
 func (b *Bot) GetMe() (tgbotapi.User, error) {
 	return b.api.GetMe()

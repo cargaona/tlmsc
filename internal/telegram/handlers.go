@@ -44,6 +44,18 @@ func escapeMarkdownV2(text string) string {
 	return result
 }
 
+// sourceEmoji returns a colored emoji for the given music source
+func sourceEmoji(source string) string {
+	switch source {
+	case "qobuz":
+		return "🟣"
+	case "deezer":
+		return "🟢"
+	default:
+		return "⚪"
+	}
+}
+
 // buildCarouselKeyboard builds an inline keyboard for carousel navigation
 func buildCarouselKeyboard(currentIndex int, totalCount int, albumID string, source string) tgbotapi.InlineKeyboardMarkup {
 	var navButtons []tgbotapi.InlineKeyboardButton
@@ -94,10 +106,12 @@ func (h *Handlers) sendCarouselItem(chatID int64, state *searchState) (tgbotapi.
 	if result.Album.Year > 0 {
 		yearStr = fmt.Sprintf(" \\(%d\\)", result.Album.Year)
 	}
-	caption := fmt.Sprintf("*%s* \\- %s%s",
+	caption := fmt.Sprintf("*%s* \\- %s%s\n%s %s",
 		escapeMarkdownV2(result.Album.Artist),
 		escapeMarkdownV2(result.Album.Title),
 		yearStr,
+		sourceEmoji(result.Source),
+		escapeMarkdownV2(strings.ToUpper(result.Source[:1])+result.Source[1:]),
 	)
 
 	// Send as photo if cover URL available, otherwise text
@@ -127,7 +141,7 @@ func buildListKeyboard(albums []albumResult, currentPage int) tgbotapi.InlineKey
 	var rows [][]tgbotapi.InlineKeyboardButton
 	for i, result := range albums[startIdx:endIdx] {
 		globalIdx := startIdx + i
-		label := fmt.Sprintf("%d. %s - %s (%d)", globalIdx+1, result.Album.Artist, result.Album.Title, result.Album.Year)
+		label := fmt.Sprintf("%s %d. %s - %s (%d)", sourceEmoji(result.Source), globalIdx+1, result.Album.Artist, result.Album.Title, result.Album.Year)
 		// Telegram button labels have a 64-byte limit for callback data, truncate label if needed
 		if len(label) > 60 {
 			label = label[:57] + "..."
@@ -197,13 +211,38 @@ func (h *Handlers) HandleStart(update *tgbotapi.Update) error {
 I can help you search for albums and download them to your library\.
 
 Available commands:
-• /search <query> \- Search for albums
+• /search \<query\> \- Search for albums
 • /queue \- Show download queue status
 • /import \- Import staged albums to beets library
 
 Example: /search rumours fleetwood mac`
 
 	msg := tgbotapi.NewMessage(update.Message.Chat.ID, welcomeMsg)
+	msg.ParseMode = tgbotapi.ModeMarkdownV2
+
+	_, err := h.bot.Send(msg)
+	return err
+}
+
+// HandleHelp sends help information and available commands
+func (h *Handlers) HandleHelp(update *tgbotapi.Update) error {
+	helpMsg := `*TLMSC* \- Album Search & Download Bot 🎵
+
+*Commands:*
+• /search \<query\> \- Search for albums on Qobuz and Deezer
+• /queue \- Show current download queue status
+• /import \- Import staged albums to beets library
+• /help \- Show this help message
+
+*How it works:*
+1\. Search for an album with /search
+2\. Browse results and tap to preview cover art
+3\. Hit Download to queue the album
+4\. Use /import to add downloaded albums to your library
+
+Example: /search rumours fleetwood mac`
+
+	msg := tgbotapi.NewMessage(update.Message.Chat.ID, helpMsg)
 	msg.ParseMode = tgbotapi.ModeMarkdownV2
 
 	_, err := h.bot.Send(msg)
@@ -220,15 +259,10 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 		return err
 	}
 
-	// Send searching message
-	searchingMsg := tgbotapi.NewMessage(update.Message.Chat.ID, "🔍 Searching for albums\\.\\.\\.")
-	searchingMsg.ParseMode = tgbotapi.ModeMarkdownV2
-	sentMsg, err := h.bot.Send(searchingMsg)
-	if err != nil {
-		return err
-	}
-
 	chatID := update.Message.Chat.ID
+
+	// Show typing indicator while searching
+	h.bot.SendChatAction(chatID, tgbotapi.ChatTyping)
 
 	// Search on all sources
 	var allAlbums []albumResult
@@ -258,7 +292,9 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 
 	// If no results found
 	if len(allAlbums) == 0 {
-		h.bot.EditMessageText(chatID, sentMsg.MessageID, "No albums found\\. Try a different query\\.")
+		noResultsMsg := tgbotapi.NewMessage(chatID, "No albums found\\. Try a different query\\.")
+		noResultsMsg.ParseMode = tgbotapi.ModeMarkdownV2
+		h.bot.Send(noResultsMsg)
 		return nil
 	}
 
@@ -269,9 +305,6 @@ func (h *Handlers) HandleSearch(update *tgbotapi.Update) error {
 		Page:   0,
 	}
 	searchResults[chatID] = state
-
-	// Delete the "searching..." message
-	h.bot.DeleteMessage(chatID, sentMsg.MessageID)
 
 	// Send album list
 	listMsg, err := h.sendAlbumList(chatID, state)
@@ -343,6 +376,9 @@ func (h *Handlers) HandleImport(update *tgbotapi.Update) error {
 	if err != nil {
 		return err
 	}
+
+	// Show uploading indicator while importing
+	h.bot.SendChatAction(chatID, tgbotapi.ChatUploadDocument)
 
 	// Run beet import -q with asis fallback so weak matches are imported with original tags
 	cmd := exec.Command("beet", "import", "-q", "--quiet-fallback=asis", h.stagingPath)

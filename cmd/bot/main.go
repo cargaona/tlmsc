@@ -58,9 +58,15 @@ func main() {
 
 	// Register command handlers
 	tgBot.RegisterHandler("start", handlers.HandleStart)
+	tgBot.RegisterHandler("help", handlers.HandleHelp)
 	tgBot.RegisterHandler("search", handlers.HandleSearch)
 	tgBot.RegisterHandler("queue", handlers.HandleQueue)
 	tgBot.RegisterHandler("import", handlers.HandleImport)
+
+	// Register command menu in Telegram
+	if err := tgBot.SetCommands(); err != nil {
+		fmt.Printf("[telegram] Failed to set command menu: %v\n", err)
+	}
 
 	// Register callback handler
 	tgBot.RegisterCallbackHandler(handlers.HandleCallback)
@@ -79,7 +85,6 @@ func main() {
 	progressCallback := func(job *streamrip.DownloadJob, progress streamrip.Progress) {
 		fmt.Printf("[download] Job %s: %s (%d%%)\n", job.ID, progress.Status, progress.Percent)
 
-		// Log completion for drop2beets
 		if progress.Status == "completed" {
 			fmt.Printf("[download] Completed: %s\n", job.Album.Title)
 			// Update Telegram message to show download completed
