@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"tlmsc/internal/cover"
@@ -15,20 +17,23 @@ import (
 )
 
 type Handlers struct {
-	bot         *Bot
-	client      *streamrip.Client
-	queue       *download.Queue
-	stagingPath string
-	debug       bool
+	bot              *Bot
+	client           *streamrip.Client
+	queue            *download.Queue
+	stagingPath      string
+	debug            bool
+	lastProgressEdit map[string]time.Time
+	progressMu       sync.Mutex
 }
 
 func NewHandlers(bot *Bot, client *streamrip.Client, queue *download.Queue, stagingPath string, debug bool) *Handlers {
 	return &Handlers{
-		bot:         bot,
-		client:      client,
-		queue:       queue,
-		stagingPath: stagingPath,
-		debug:       debug,
+		bot:              bot,
+		client:           client,
+		queue:            queue,
+		stagingPath:      stagingPath,
+		debug:            debug,
+		lastProgressEdit: make(map[string]time.Time),
 	}
 }
 
@@ -89,6 +94,21 @@ func buildCarouselKeyboard(currentIndex int, totalCount int, albumID string, sou
 	return tgbotapi.NewInlineKeyboardMarkup(navButtons, []tgbotapi.InlineKeyboardButton{counterBtn})
 }
 
+// buildCarouselCaption builds the MarkdownV2 caption for a carousel album
+func buildCarouselCaption(result *albumResult) string {
+	var yearStr string
+	if result.Album.Year > 0 {
+		yearStr = fmt.Sprintf(" \\(%d\\)", result.Album.Year)
+	}
+	return fmt.Sprintf("*%s* \\- %s%s\n%s %s",
+		escapeMarkdownV2(result.Album.Artist),
+		escapeMarkdownV2(result.Album.Title),
+		yearStr,
+		sourceEmoji(result.Source),
+		escapeMarkdownV2(strings.ToUpper(result.Source[:1])+result.Source[1:]),
+	)
+}
+
 // sendCarouselItem sends the current carousel album as a photo message
 // Returns the sent message so the caller can track its ID
 func (h *Handlers) sendCarouselItem(chatID int64, state *searchState) (tgbotapi.Message, error) {
@@ -100,19 +120,7 @@ func (h *Handlers) sendCarouselItem(chatID int64, state *searchState) (tgbotapi.
 	}
 
 	markup := buildCarouselKeyboard(state.Index, len(state.Albums), result.Album.ID, result.Source)
-
-	// Build caption
-	var yearStr string
-	if result.Album.Year > 0 {
-		yearStr = fmt.Sprintf(" \\(%d\\)", result.Album.Year)
-	}
-	caption := fmt.Sprintf("*%s* \\- %s%s\n%s %s",
-		escapeMarkdownV2(result.Album.Artist),
-		escapeMarkdownV2(result.Album.Title),
-		yearStr,
-		sourceEmoji(result.Source),
-		escapeMarkdownV2(strings.ToUpper(result.Source[:1])+result.Source[1:]),
-	)
+	caption := buildCarouselCaption(result)
 
 	// Send as photo if cover URL available, otherwise text
 	if result.Album.CoverURL != "" {
@@ -124,6 +132,26 @@ func (h *Handlers) sendCarouselItem(chatID int64, state *searchState) (tgbotapi.
 	msg.ParseMode = tgbotapi.ModeMarkdownV2
 	msg.ReplyMarkup = markup
 	return h.bot.Send(msg)
+}
+
+// editCarouselItem edits the current carousel message in-place with a new photo
+func (h *Handlers) editCarouselItem(chatID int64, messageID int, state *searchState) error {
+	result := &state.Albums[state.Index]
+
+	// Fetch cover URL if not cached
+	if result.Album.CoverURL == "" {
+		result.Album.CoverURL = cover.FetchCoverURL(result.Album.ID, result.Source, result.Album.Artist, result.Album.Title)
+	}
+
+	// Can only edit media if we have a photo URL
+	if result.Album.CoverURL == "" {
+		return fmt.Errorf("no cover URL for edit")
+	}
+
+	markup := buildCarouselKeyboard(state.Index, len(state.Albums), result.Album.ID, result.Source)
+	caption := buildCarouselCaption(result)
+
+	return h.bot.EditMessageMedia(chatID, messageID, result.Album.CoverURL, caption, markup)
 }
 
 // buildListKeyboard builds an inline keyboard for the paginated album list
@@ -238,7 +266,8 @@ func (h *Handlers) HandleHelp(update *tgbotapi.Update) error {
 1\. Search for an album with /search
 2\. Browse results and tap to preview cover art
 3\. Hit Download to queue the album
-4\. Use /import to add downloaded albums to your library
+4\. Albums are automatically imported after download
+_Use /import for manual imports if needed_
 
 Example: /search rumours fleetwood mac`
 
@@ -501,13 +530,15 @@ func (h *Handlers) HandleCallback(update *tgbotapi.Update) error {
 	if data == "carousel_next" {
 		if state.Index < len(state.Albums)-1 {
 			state.Index++
-			// Delete old message and send new one (can't edit photo on a photo message)
-			h.bot.DeleteMessage(chatID, messageID)
-			newMsg, err := h.sendCarouselItem(chatID, state)
-			if err != nil {
-				return err
+			if err := h.editCarouselItem(chatID, messageID, state); err != nil {
+				// Fallback to delete+send if edit fails
+				h.bot.DeleteMessage(chatID, messageID)
+				newMsg, err := h.sendCarouselItem(chatID, state)
+				if err != nil {
+					return err
+				}
+				state.MessageID = newMsg.MessageID
 			}
-			state.MessageID = newMsg.MessageID
 		}
 		h.bot.AnswerCallbackQuery(callbackID, "", false)
 		return nil
@@ -516,12 +547,14 @@ func (h *Handlers) HandleCallback(update *tgbotapi.Update) error {
 	if data == "carousel_prev" {
 		if state.Index > 0 {
 			state.Index--
-			h.bot.DeleteMessage(chatID, messageID)
-			newMsg, err := h.sendCarouselItem(chatID, state)
-			if err != nil {
-				return err
+			if err := h.editCarouselItem(chatID, messageID, state); err != nil {
+				h.bot.DeleteMessage(chatID, messageID)
+				newMsg, err := h.sendCarouselItem(chatID, state)
+				if err != nil {
+					return err
+				}
+				state.MessageID = newMsg.MessageID
 			}
-			state.MessageID = newMsg.MessageID
 		}
 		h.bot.AnswerCallbackQuery(callbackID, "", false)
 		return nil
@@ -617,31 +650,50 @@ type searchState struct {
 // searchResults temporarily stores search results keyed by chat ID
 var searchResults = make(map[int64]*searchState)
 
-// UpdateDownloadMessage updates the Telegram message with download status
-func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress streamrip.Progress) {
-	// Parse job ID format: "chatID_messageID"
-	parts := strings.Split(job.ID, "_")
+// parseJobID extracts chatID and messageID from a job ID string
+func parseJobID(jobID string) (int64, int, bool) {
+	parts := strings.Split(jobID, "_")
 	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	chatID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	messageID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, false
+	}
+	return chatID, messageID, true
+}
+
+// UpdateDownloadMessage updates the Telegram message with download status
+// Throttles intermediate progress updates to 1 per 3 seconds
+func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress streamrip.Progress) {
+	chatID, messageID, ok := parseJobID(job.ID)
+	if !ok {
 		if h.debug {
 			fmt.Printf("[handlers] Invalid job ID format: %s\n", job.ID)
 		}
 		return
 	}
 
-	chatID, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil {
-		if h.debug {
-			fmt.Printf("[handlers] Failed to parse chat ID: %v\n", err)
+	// Throttle intermediate progress updates (not completed/failed)
+	if progress.Status != "completed" && progress.Status != "failed" {
+		h.progressMu.Lock()
+		lastEdit, exists := h.lastProgressEdit[job.ID]
+		now := time.Now()
+		if exists && now.Sub(lastEdit) < 3*time.Second {
+			h.progressMu.Unlock()
+			return
 		}
-		return
-	}
-
-	messageID, err := strconv.Atoi(parts[1])
-	if err != nil {
-		if h.debug {
-			fmt.Printf("[handlers] Failed to parse message ID: %v\n", err)
-		}
-		return
+		h.lastProgressEdit[job.ID] = now
+		h.progressMu.Unlock()
+	} else {
+		// Clean up throttle entry on terminal states
+		h.progressMu.Lock()
+		delete(h.lastProgressEdit, job.ID)
+		h.progressMu.Unlock()
 	}
 
 	// Build the updated message text
@@ -654,7 +706,7 @@ func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress st
 	switch progress.Status {
 	case "completed":
 		statusEmoji = "✅"
-		statusText = "Downloaded successfully"
+		statusText = "Downloaded\n⏳ Importing to library\\.\\.\\."
 	case "failed":
 		statusEmoji = "❌"
 		statusText = "Download failed"
@@ -663,7 +715,7 @@ func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress st
 		statusText = fmt.Sprintf("Downloading\\.\\.\\. %d%%", progress.Percent)
 	default:
 		statusEmoji = "⏳"
-		statusText = fmt.Sprintf("%s (%d%%)", progress.Status, progress.Percent)
+		statusText = escapeMarkdownV2(fmt.Sprintf("%s (%d%%)", progress.Status, progress.Percent))
 	}
 
 	messageText := fmt.Sprintf("*%s \\- %s*\n\n%s %s", escapedArtist, escapedTitle, statusEmoji, statusText)
@@ -673,6 +725,97 @@ func (h *Handlers) UpdateDownloadMessage(job *streamrip.DownloadJob, progress st
 			fmt.Printf("[handlers] Failed to update message: %v\n", err)
 		}
 	}
+
+	// Auto-import after successful download
+	if progress.Status == "completed" {
+		go h.autoImport(chatID, messageID, job)
+	}
+}
+
+// autoImport imports a recently downloaded album and updates the status message
+func (h *Handlers) autoImport(chatID int64, messageID int, job *streamrip.DownloadJob) {
+	// Find the most recently modified directory in staging (the one just downloaded)
+	albumDir := h.findLatestStagingDir()
+	if albumDir == "" {
+		// Nothing to import — update message without import status
+		h.updateImportStatus(chatID, messageID, job, "✅ Downloaded")
+		return
+	}
+
+	h.bot.SendChatAction(chatID, tgbotapi.ChatUploadDocument)
+
+	cmd := exec.Command("beet", "import", "-q", "--quiet-fallback=asis", albumDir)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if h.debug {
+			fmt.Printf("[import] Auto-import failed for %s: %v\nOutput: %s\n", albumDir, err, string(output))
+		}
+		h.updateImportStatus(chatID, messageID, job, "✅ Downloaded\n⚠️ Import failed \\— use /import to retry")
+		return
+	}
+
+	if h.debug {
+		fmt.Printf("[import] Auto-import output: %s\n", string(output))
+	}
+
+	// Clean up the album directory if beets moved the files
+	h.cleanupAlbumDir(albumDir)
+
+	h.updateImportStatus(chatID, messageID, job, "✅ Imported to library")
+}
+
+// updateImportStatus edits the download status message with final import result
+func (h *Handlers) updateImportStatus(chatID int64, messageID int, job *streamrip.DownloadJob, status string) {
+	escapedArtist := escapeMarkdownV2(job.Album.Artist)
+	escapedTitle := escapeMarkdownV2(job.Album.Title)
+	messageText := fmt.Sprintf("*%s \\- %s*\n\n%s", escapedArtist, escapedTitle, status)
+
+	if err := h.bot.EditMessageText(chatID, messageID, messageText); err != nil {
+		if h.debug {
+			fmt.Printf("[handlers] Failed to update import status: %v\n", err)
+		}
+	}
+}
+
+// findLatestStagingDir returns the most recently modified directory in staging
+func (h *Handlers) findLatestStagingDir() string {
+	entries, err := os.ReadDir(h.stagingPath)
+	if err != nil {
+		return ""
+	}
+
+	var latestDir string
+	var latestTime time.Time
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(latestTime) {
+			latestTime = info.ModTime()
+			latestDir = filepath.Join(h.stagingPath, e.Name())
+		}
+	}
+	return latestDir
+}
+
+// cleanupAlbumDir removes an album directory if beets has moved all music files out
+func (h *Handlers) cleanupAlbumDir(dirPath string) {
+	musicExts := []string{"*.flac", "*.mp3", "*.ogg", "*.m4a", "*.wav", "*.opus"}
+	for _, ext := range musicExts {
+		matches, _ := filepath.Glob(filepath.Join(dirPath, "**", ext))
+		if len(matches) > 0 {
+			return
+		}
+		matches, _ = filepath.Glob(filepath.Join(dirPath, ext))
+		if len(matches) > 0 {
+			return
+		}
+	}
+	os.RemoveAll(dirPath)
 }
 
 // Maximum search results

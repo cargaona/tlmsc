@@ -84,12 +84,7 @@ func main() {
 	// Create progress callback for download worker
 	progressCallback := func(job *streamrip.DownloadJob, progress streamrip.Progress) {
 		fmt.Printf("[download] Job %s: %s (%d%%)\n", job.ID, progress.Status, progress.Percent)
-
-		if progress.Status == "completed" {
-			fmt.Printf("[download] Completed: %s\n", job.Album.Title)
-			// Update Telegram message to show download completed
-			handlers.UpdateDownloadMessage(job, progress)
-		}
+		handlers.UpdateDownloadMessage(job, progress)
 	}
 
 	// Start download worker

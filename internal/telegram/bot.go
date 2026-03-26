@@ -125,6 +125,28 @@ func (b *Bot) DeleteMessage(chatID int64, messageID int) error {
 	return err
 }
 
+// EditMessageMedia edits a photo message with a new photo, caption and keyboard
+func (b *Bot) EditMessageMedia(chatID int64, messageID int, photoURL string, caption string, markup tgbotapi.InlineKeyboardMarkup) error {
+	media := tgbotapi.InputMediaPhoto{
+		BaseInputMedia: tgbotapi.BaseInputMedia{
+			Type:      "photo",
+			Media:     tgbotapi.FileURL(photoURL),
+			Caption:   caption,
+			ParseMode: tgbotapi.ModeMarkdownV2,
+		},
+	}
+	edit := tgbotapi.EditMessageMediaConfig{
+		BaseEdit: tgbotapi.BaseEdit{
+			ChatID:      chatID,
+			MessageID:   messageID,
+			ReplyMarkup: &markup,
+		},
+		Media: media,
+	}
+	_, err := b.api.Send(edit)
+	return err
+}
+
 // SendChatAction sends a chat action indicator (e.g., "typing", "upload_document")
 func (b *Bot) SendChatAction(chatID int64, action string) {
 	actionMsg := tgbotapi.NewChatAction(chatID, action)
