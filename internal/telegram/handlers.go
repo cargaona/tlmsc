@@ -752,6 +752,12 @@ func (h *Handlers) autoImport(chatID int64, messageID int, job *streamrip.Downlo
 		fmt.Printf("[import] Auto-import output: %s\n", string(output))
 	}
 
+	// Check if beets actually imported anything
+	if strings.Contains(string(output), "No files imported") {
+		h.updateImportStatus(chatID, messageID, job, "✅ Downloaded\n⚠️ Import skipped \\— use /import to retry")
+		return
+	}
+
 	// Clean up the album directory if beets moved the files
 	h.cleanupAlbumDir(albumDir)
 
