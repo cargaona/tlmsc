@@ -16,10 +16,11 @@ rip config reset -y > /dev/null 2>&1 || echo "Warning: Could not reset streamrip
 if [ -n "$QOBUZ_EMAIL" ] && [ -n "$QOBUZ_PASSWORD" ]; then
     echo "🔐 Setting Qobuz credentials..."
     
-    # Patch the config file - pass token/hash as-is without transformation
-    sed -i "s/^email_or_userid = .*/email_or_userid = \"$QOBUZ_EMAIL\"/" "$CONFIG_HOME/.config/streamrip/config.toml"
-    sed -i "s/^password_or_token = .*/password_or_token = \"$QOBUZ_PASSWORD\"/" "$CONFIG_HOME/.config/streamrip/config.toml"
-    sed -i 's/^use_auth_token = .*/use_auth_token = false/' "$CONFIG_HOME/.config/streamrip/config.toml"
+    # Patch the config file using awk to avoid busybox sed limitations with long values
+    CONFIG_FILE="$CONFIG_HOME/.config/streamrip/config.toml"
+    awk -v val="$QOBUZ_EMAIL" '/^email_or_userid = /{print "email_or_userid = \"" val "\""; next}1' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    awk -v val="$QOBUZ_PASSWORD" '/^password_or_token = /{print "password_or_token = \"" val "\""; next}1' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    awk '/^use_auth_token = /{print "use_auth_token = false"; next}1' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     
     echo "✅ Qobuz configured"
 else
@@ -34,9 +35,10 @@ fi
 if [ -n "$DEEZER_ARL" ]; then
     echo "🔐 Setting Deezer credentials..."
     
-    # Patch the config file
-    sed -i "s/^arl = .*/arl = \"$DEEZER_ARL\"/" "$CONFIG_HOME/.config/streamrip/config.toml"
-    sed -i 's/^use_deezloader = .*/use_deezloader = false/' "$CONFIG_HOME/.config/streamrip/config.toml"
+    # Patch the config file using awk to avoid busybox sed limitations with long values
+    CONFIG_FILE="$CONFIG_HOME/.config/streamrip/config.toml"
+    awk -v val="$DEEZER_ARL" '/^arl = /{print "arl = \"" val "\""; next}1' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
+    awk '/^use_deezloader = /{print "use_deezloader = false"; next}1' "$CONFIG_FILE" > "$CONFIG_FILE.tmp" && mv "$CONFIG_FILE.tmp" "$CONFIG_FILE"
     
     echo "✅ Deezer configured"
 else
@@ -45,7 +47,7 @@ fi
 
 # Update download folder to staging path
 echo "📁 Setting download folder to /data/staging..."
-sed -i 's|^folder = .*|folder = "/data/staging"|' "$CONFIG_HOME/.config/streamrip/config.toml"
+awk '/^folder = /{print "folder = \"/data/staging\""; next}1' "$CONFIG_HOME/.config/streamrip/config.toml" > "$CONFIG_HOME/.config/streamrip/config.toml.tmp" && mv "$CONFIG_HOME/.config/streamrip/config.toml.tmp" "$CONFIG_HOME/.config/streamrip/config.toml"
 
 # Verify config is valid
 echo "✅ Streamrip configuration generated at $CONFIG_HOME/.config/streamrip/config.toml"
