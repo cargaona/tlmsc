@@ -16,7 +16,7 @@ func LoadFromEnv() *Config {
 	cfg := &Config{
 		TelegramToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
 		StagingPath:   getEnv("STAGING_PATH", "/data/staging"),
-		BeetsDir:      getEnv("BEETSDIR", "/home/char/.config/beets"),
+		BeetsDir:      getEnv("BEETSDIR", "/config/beets"),
 		Sources:       []string{"qobuz", "deezer"},
 		DebugMode:     getEnv("DEBUG", "false") == "true",
 	}
