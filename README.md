@@ -156,6 +156,22 @@ The beets music library must be mounted at the same path as on the host so `beet
 
 ## Development
 
+### Dev shell (devenv)
+
+The repo ships a [devenv](https://devenv.sh) shell providing Go, `rip` (streamrip),
+`beet` (beets) and `ffmpeg`, so no `pip install` is needed:
+
+```bash
+direnv allow      # once — or run `devenv shell` by hand
+tlhelp            # command reference
+tlcheck           # check the CLIs and credentials, including live provider auth
+tlrun             # run the bot
+```
+
+Staging, music and beets paths are redirected to `.devenv-state/` inside the repo,
+so a local run never writes to `/mnt/seagate/music`. Credentials are read from the
+gitignored `.env`.
+
 ### Building locally
 
 ```bash

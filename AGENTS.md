@@ -6,7 +6,8 @@ TeleMusic (tlmsc) is a Go Telegram bot that searches, downloads, and imports alb
 into a beets music library. It shells out to the `rip` CLI (streamrip) for downloads
 and `beet` CLI for library imports. Single external Go dependency: telegram-bot-api v5.
 
-Module: `tlmsc` | Go 1.25 | No test files exist yet.
+Module: `tlmsc` | Go 1.25 | One integration test (`internal/streamrip/client_test.go`,
+skips without the `rip` CLI or credentials).
 
 ## Project Structure
 
@@ -28,6 +29,17 @@ docker-compose.yaml          # Single-service compose for local dev
 ```
 
 ## Build / Run / Test Commands
+
+The dev shell is [devenv](https://devenv.sh) (same as `kube-server`, `reet`). It puts
+Go, `rip`, and `beet` on PATH and points `STAGING_PATH` / `MUSIC_LIBRARY_PATH` /
+`BEETSDIR` at `.devenv-state/` so local runs never touch the real library.
+
+```bash
+direnv allow          # once; or `devenv shell` manually
+tlhelp                # command reference
+tlcheck               # verify rip/beet + credentials (incl. live provider auth)
+tlrun                 # go run ./cmd/bot
+```
 
 ```bash
 # Build binary

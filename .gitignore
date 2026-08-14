@@ -51,6 +51,18 @@ coverage.txt
 # Go modules
 vendor/
 
+# devenv / direnv
+.devenv/
+.devenv.flake.nix
+.direnv/
+devenv.local.nix
+# Local stand-ins for /data/staging and /mnt/seagate/music
+.devenv-state/
+
+# Upstream streamrip checkout, kept locally for reading the `rip` internals.
+# Not a dependency -- the image installs streamrip from pip.
+/streamrip/
+
 # Config files (for local testing)
 config.toml
 config.yaml
