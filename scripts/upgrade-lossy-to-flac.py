@@ -204,11 +204,27 @@ def process(entry, args, st):
 
     # ---- download -------------------------------------------------------
     r = run(['rip', 'id', 'deezer', 'album', str(dz_id)], timeout=args.dl_timeout)
+
+    def sweep():
+        """Delete every staging dir this album created. Staging has ~20GB free;
+        a multi-disc album is ~1GB, so leaking these fills the disk."""
+        for d in staging_dirs() - before:
+            shutil.rmtree(f'{STAGING}/{d}', ignore_errors=True)
+
+    # `rip` can exit before its output directory is visible to us -- a 2-disc
+    # album showed up ~seconds later, which read as "download produced nothing"
+    # while quietly leaving 979MB behind. Give it a chance to appear.
     new = staging_dirs() - before
+    for _ in range(10):
+        if new:
+            break
+        time.sleep(3)
+        new = staging_dirs() - before
+
     if not new:
-        log(f'FAIL  {label}  download produced nothing'
+        log(f'FAIL  {label}  download produced nothing (rc={r.returncode})'
             f'{" | " + r.stderr.strip()[-160:] if r.stderr.strip() else ""}')
-        st['failed'][key] = 'download produced no directory'
+        st['failed'][key] = f'download produced no directory (rc={r.returncode})'
         return False
 
     newdir = f'{STAGING}/{sorted(new)[0]}'
@@ -216,12 +232,12 @@ def process(entry, args, st):
     if got == 0:
         log(f'FAIL  {label}  downloaded but no FLAC files present')
         st['failed'][key] = 'no flac in download'
-        shutil.rmtree(newdir, ignore_errors=True)
+        sweep()
         return False
     if got < want - 2:
         log(f'FAIL  {label}  only {got} FLAC vs {want} local tracks - refusing')
         st['failed'][key] = f'track shortfall {got}<{want}'
-        shutil.rmtree(newdir, ignore_errors=True)
+        sweep()
         return False
 
     size = dir_bytes(newdir)
@@ -238,7 +254,7 @@ def process(entry, args, st):
         # preserved. Refuse rather than destroy what we cannot see.
         log(f'FAIL  {label}  none of {len(old_paths)} originals found on disk - refusing to replace')
         st['failed'][key] = 'originals not found on disk'
-        shutil.rmtree(newdir, ignore_errors=True)
+        sweep()
         return False
 
     r = run(['beet', 'remove', '-a', '-f', f'id:{old_id}'], timeout=300)
@@ -246,34 +262,47 @@ def process(entry, args, st):
         log(f'WARN  {label}  "beet remove" rc={r.returncode} | {(r.stderr or "").strip()[-120:]}')
 
     # ---- import ---------------------------------------------------------
+    # Snapshot album ids so the import can be identified by id afterwards.
+    # Looking it up by (albumartist, album) is wrong: beets renames on import
+    # via MusicBrainz. "Live (collector's edition)" came back as "Live
+    # (Collector's Edition)" -- different case and apostrophe -- which read as a
+    # failed import, rolled the originals back, and left the imported FLAC
+    # sitting in the library as a duplicate.
+    con = db()
+    before_ids = {x[0] for x in con.execute('select id from albums')}
+    con.close()
+
     r = run(['beet', 'import', '-q', '--quiet-fallback=asis', newdir], timeout=args.import_timeout)
     import_ok = r.returncode == 0
 
     # ---- verify the library really gained a FLAC copy --------------------
-    flac_n = 0
+    new_ids, flac_n = set(), 0
     if import_ok:
         con = db()
-        rows = con.execute('''
-            select a.id, sum(case when i.format="FLAC" then 1 else 0 end)
-            from albums a join items i on i.album_id=a.id
-            where a.albumartist=? and a.album=? group by a.id
-        ''', (artist, album)).fetchall()
+        new_ids = {x[0] for x in con.execute('select id from albums')} - before_ids
+        for aid in new_ids:
+            n = con.execute('select count(*) from items where album_id=? and format="FLAC"',
+                            (aid,)).fetchone()[0]
+            flac_n = max(flac_n, n)
         con.close()
-        flac_n = max([r[1] for r in rows], default=0)
 
     if not import_ok or flac_n == 0:
         why = f'import rc={r.returncode}' if not import_ok else 'no FLAC album after import'
         log(f'FAIL  {label}  {why} - rolling back {len(moved)} files')
+        # Drop whatever the import did create, files included, so a failure
+        # never leaves a half-replaced duplicate behind.
+        for aid in new_ids:
+            run(['beet', 'remove', '-a', '-f', '--delete', f'id:{aid}'], timeout=300)
         unquarantine(moved)
         rb = run(['beet', 'import', '-q', '--quiet-fallback=asis',
                   os.path.dirname(old_paths[0])], timeout=args.import_timeout) if old_paths else None
         if rb is not None and rb.returncode != 0:
             log(f'WARN  {label}  restored files but re-import rc={rb.returncode} - run "beet update"')
         st['failed'][key] = why
-        shutil.rmtree(newdir, ignore_errors=True)
+        sweep()
         return False
 
-    shutil.rmtree(newdir, ignore_errors=True)
+    sweep()
     st['done'].append(key)
     st['bytes'] += size
     log(f'OK    {label}  {got} FLAC in, {len(moved)} old files quarantined, {size/1048576:.0f} MB')
